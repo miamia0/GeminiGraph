@@ -281,7 +281,7 @@ public:
     }
   }
 
-  // allocate a numa-aware vertex array 
+  // allocate a numa-aware vertex array
   //use mmap
   template <typename T>
   T *alloc_vertex_array()
@@ -515,6 +515,10 @@ public:
     //              MPI_Datatype datatype, MPI_Op op, MPI_Comm comm)
     // 将所有节点的out_degree数组求和(MPI_SUM操作)
     MPI_Allreduce(MPI_IN_PLACE, out_degree, vertices, vid_t, MPI_SUM, MPI_COMM_WORLD);
+    //===========================end part1  calulate out_degree
+
+
+    //=========================== part2 calulate partition_offset
 
     // locality-aware chunking
     /* 计算
@@ -574,6 +578,9 @@ public:
     {
       assert(partition_offset[i] == global_partition_offset[i]);
     }
+
+        //===========================end part2 calulate partition_offset
+
 #ifdef PRINT_DEBUG_MESSAGES
     if (partition_id == 0)
     {
@@ -589,6 +596,8 @@ public:
     }
     MPI_Barrier(MPI_COMM_WORLD);
 #endif
+    //=========================== part3 calculate local_partition_offset(numa)
+
     /* 计算
     local_partition_offset 
     local_partition_offset是numa的顶点划分，具体求解方式与partition_offset 基本相同
@@ -653,6 +662,14 @@ public:
     numa_free(out_degree, sizeof(VertexId) * vertices);
     out_degree = filtered_out_degree;
     in_degree = out_degree;
+    //=========================== end part3 local_partition_offset
+
+
+
+
+
+
+    //=========================== part4 calculate outgoing_adj_bitmap， outgoing_adj_index
 
     //数据发送的初始化
     //buffered_edges指的是当每个节点前已经得到的边数
@@ -685,7 +702,6 @@ public:
       outgoing_adj_index[s_i] = (EdgeId *)numa_alloc_onnode(sizeof(EdgeId) * (vertices + 1), s_i);
     }
     {
-      //TODO
       std::thread recv_thread_dst([&]() {
         int finished_count = 0;
         MPI_Status recv_status;
@@ -807,10 +823,21 @@ public:
       }
       //等待recv_thread_dst完成
       recv_thread_dst.join();
+    //===========================end part4 calculate outgoing_adj_bitmap， outgoing_adj_index
+
+
+
+
 #ifdef PRINT_DEBUG_MESSAGES
       printf("machine(%d) got %lu symmetric edges\n", partition_id, recv_outgoing_edges);
 #endif
     }
+
+
+
+        //===========================part5 calculate compressed_outgoing_adj_vertices compressed_outgoing_adj_index
+        // compressed_outgoing_adj_index 是为了计算outgoing_adj_index
+
     /*
     计算compressed_outgoing_adj_vertices（某个socket的有出边的顶点总数）
     compressed_outgoing_adj_index
@@ -868,6 +895,14 @@ public:
 #endif
       outgoing_adj_list[s_i] = (AdjUnit<EdgeData> *)numa_alloc_onnode(unit_size * outgoing_edges[s_i], s_i);
     }
+            //===========================endpart5 calculate compressed_outgoing_adj_vertices compressed_outgoing_adj_index
+
+
+
+
+
+            //=========================== part6 calculate outgoing_adj_list
+
     {
       /*计算outgoing_adj_list*/
       std::thread recv_thread_dst([&]() {
@@ -960,6 +995,7 @@ public:
           }
         }
       }
+
       for (int i = 0; i < partitions; i++)
       {
         if (buffered_edges[i] == 0)
@@ -974,6 +1010,9 @@ public:
       }
       recv_thread_dst.join();
     }
+
+    //=========================== end part6 calculate outgoing_adj_list
+
     //在@recv_thread_dst中使用了outgoing_adj_index，需要恢复原样
     for (int s_i = 0; s_i < sockets; s_i++)
     {
@@ -1714,7 +1753,9 @@ public:
       tuned_chunks_dense[i] = new ThreadState[threads];
       EdgeId remained_edges;
       int remained_partitions;
+      //第一个 mirror
       VertexId last_p_v_i;
+      //最后一个mirror
       VertexId end_p_v_i;
       for (int t_i = 0; t_i < threads; t_i++)
       {
@@ -1724,8 +1765,11 @@ public:
         if (s_j == 0)
         {
           VertexId p_v_i = 0;
+          /*
+          */
           while (p_v_i < compressed_incoming_adj_vertices[s_i])
           {
+            //mirror
             VertexId v_i = compressed_incoming_adj_index[s_i][p_v_i].vertex;
             if (v_i >= partition_offset[i])
             {
@@ -1754,6 +1798,7 @@ public:
         tuned_chunks_dense[i][t_i].curr = last_p_v_i;
         tuned_chunks_dense[i][t_i].end = last_p_v_i;
         remained_partitions = threads_per_socket - s_j;
+        //expected_chunk_size 希望均分的结果，和分partition分socket的方法一样
         EdgeId expected_chunk_size = remained_edges / remained_partitions;
         if (remained_partitions == 1)
         {
@@ -1806,7 +1851,6 @@ public:
       }
       thread_state[t_i]->status = WORKING;
     }
-//每个线程执行的内容
 #pragma omp parallel reduction(+ \
                                : reducer)
     {
