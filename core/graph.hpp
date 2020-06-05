@@ -447,8 +447,10 @@ public:
 
     //用于MPI中的数据传递
     MPI_Datatype vid_t = get_mpi_data_type<VertexId>();
+    //顶点数
     this->vertices = vertices;
     long total_bytes = file_size(path.c_str());
+    //边数
     this->edges = total_bytes / edge_unit_size;
 #ifdef PRINT_DEBUG_MESSAGES
     if (partition_id == 0)
